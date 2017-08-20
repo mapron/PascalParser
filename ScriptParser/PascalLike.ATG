@@ -1,0 +1,1234 @@
+#include "wchar.h"
+#include "ast.h"
+#include <QFile>
+#include <QTextStream>
+#include <QDebug>
+
+COMPILER Pascal
+
+    AST::pascalSource   _pascal;
+    bool _StSemantic;
+    int _currentFile;
+
+    void Err(wchar_t* msg) {
+        errors->Error(la->line, la->col, msg);
+    }
+
+    bool IsLabelSt() {
+       scanner->ResetPeek();
+        Token *x = la;
+        while ( x->kind == _ident)
+            x = scanner->Peek();
+        return x->kind == _colon;
+    }
+
+    bool IsBoundSt() {
+       scanner->ResetPeek();
+        Token *x = la;
+        while ( x->kind == _ident ||  x->kind == _IN)
+            x = scanner->Peek();
+        return x->kind == _colon ||  x->kind == _LET;
+    }
+
+
+    bool IsAssignment() {
+        scanner->ResetPeek();
+        static QSet<int> breakSet = QSet<int>() << _EOF << _FOR << _DO << _WITH << _REPEAT << _IF_ << _BEGIN  << _TRY << _RAISE_ << _CASE ;
+        Token *x = la;
+        int parLevel = 0;
+        while ( x->kind != _semicol ){
+           if (breakSet.contains(x->kind)) return false;
+           if (x->kind == _OPENPAR) parLevel ++;
+           if (x->kind == _CLOSEPAR) parLevel --;
+            x = scanner->Peek();
+            if (x->kind == _LET && parLevel ==0) return true;
+        }
+        return false;
+    }
+    AST::CodeLocation cur() {
+        if (la) return AST::CodeLocation (_currentFile, la->line, la->col, la->charPos);
+        return AST::CodeLocation (_currentFile, t->line, t->col, t->charPos);
+    }
+
+    bool StSemantic() {
+        return _StSemantic;
+    }
+
+
+    void MakeTokenList(QList<AST::TToken> &list ) {
+
+        static QSet<int> kw = QSet<int>() <<         _ABSTRACT<< _AND<< _ARRAY<< _BEGIN<< _BREAK<< _CASE<< _CLASS<< _CONST << _CONSTANT << _CONSTRUCTOR<< _CONTINUE<< _DEC<< _DESTRUCTOR<< _DIV<< _DO<<
+                                                     _DOWNTO<< _ELSE<< _END_<< _EXCEPT<< _EXTERNAL<< _EXIT<< _FALSE<< _FAR<< _FILE<< _FINALIZATION<< _FINALLY<< _FOR<< _FORWARD<< _FUNCTION<<
+                                                     _GOTO<< _IDENT<< _IF_<< _INC<< _INHERITED<< _HALT<< _HIGH<< _IMPLEMENTATION<< _INTERFACE<< _INITIALIZATION<< _IN<< _LABEL<< _LOOPHOLE<<
+                                                     _LOW<< _MOD<< _NOT<< _OBJECT<< _OF<< _ON<< _OR<< _ORIGIN<< _OTHERWISE<< _OVERLOAD<< _OVERRIDE<< _PACKED<< _PRIVATE<< _PROCEDURE<< _PROGRAM<<
+                                                     _PROTECTED<< _PUBLIC<< _RAISE_<< _RECORD<< _REPEAT<< _RETURN<< _SET<< _SHL<< _SHR<< _STATIC<< _STR<< _THEN<< _TO_<< _TRUE<< _TRY<<
+                                                     _TYPE<< _UNTIL<< _UNIT<< _USES<< _VAR<< _VIRTUAL<< _WHILE<< _WITH<< _XOR<< _READ<< _READLN<< _WRITE<< _WRITELN<< _FUNCTION_BLOCK<<
+                                                     _END_FUNCTION_BLOCK<< _VAR_INPUT << _VAR_OUTPUT<< _VAR_IN_OUT<< _VAR_EXTERNAL << _VAR_CONST << _END_VAR<<_END_FUNCTION<< _END_IF<<_END_FOR<<_END_WHILE<< _END_REPEAT<<
+                                                     _END_CASE << _END_PROGRAM << _END_TYPE << _END_CLASS << _RETAIN ;
+
+        static QSet<int> ops = QSet<int>() <<   _PLUS<< _MINUS<<_MUL<<_DIVR<<_LET<<_GT<<_LT<<_LE<<_GE<<_EQ<<_NE;
+
+         static QSet<int> blockStartKeyWords = QSet<int>() <<   _IF_<< _FOR<<_WHILE<< _PROGRAM << _FUNCTION << _FUNCTION_BLOCK << _PROCEDURE << _TYPE << _ELSE
+                                                             << _VAR  << _VAR_INPUT << _VAR_OUTPUT << _VAR_IN_OUT << _VAR_EXTERNAL  << _VAR_CONST << _BEGIN;
+         static QSet<int> blockEndKeyWords = QSet<int>() << _ELSE  << _END_IF << _END_FOR << _END_WHILE << _END_PROGRAM
+                                  << _END_FUNCTION << _END_FUNCTION_BLOCK << _END_TYPE << _END_VAR << _END_CLASS << _END_;
+
+
+        t = NULL;
+        la = dummyToken;
+       // la->val = coco_string_create(L"Dummy Token");
+        Get();
+        while (la->kind != 0){
+            AST::TToken tk;
+            tk._charPos = la->charPos;
+            tk._tlen = la->valSize;
+            if (blockStartKeyWords.contains(la->kind)) {
+                tk._kwType |= AST::TToken::kwBlockStart;
+            }
+            if (blockEndKeyWords.contains(la->kind)) {
+                tk._kwType |= AST::TToken::kwBlockEnd;
+            }
+            if (kw.contains(la->kind))
+                tk._type = AST::TToken::tKeyword;
+            if (ops.contains(la->kind))
+                tk._type = AST::TToken::tOperator;
+            if (la->kind == _ident)
+                tk._type = AST::TToken::tIdent;
+            if (la->kind == _string || la->kind == _character)
+                tk._type = AST::TToken::tString;
+            if (la->kind == _realcon || la->kind == _intcon)
+                tk._type = AST::TToken::tNumber;
+            list << tk;
+            Get();
+        }
+    }
+
+    void ParseExpression(AST::expr& expr){
+        t = NULL;
+        la = dummyToken;
+        Get();
+        Expr(expr);
+        Expect(0);
+    }
+    void ParseAssignment(AST::assignmentst& assignmentst){
+        t = NULL;
+        la = dummyToken;
+        Get();
+        Assignmentst(assignmentst);
+        Expect(0);
+    }
+
+    QString ReadString(Token* t, bool hasQuotes = false, bool removeUnderscore = false)
+    {
+        QString ret;
+        if (t->val && t->valSize)
+            ret= QString::fromWCharArray(t->val + int(hasQuotes), t->valSize - int(hasQuotes)*2);
+        if (removeUnderscore)
+            ret.replace('_', "");
+        return ret;
+    }
+
+    int64_t ReadInteger(Token* t, int offset =0, int base = 10)
+    {
+        return ReadString(t, false, true).mid(offset).toLongLong(0, base);
+    }
+
+
+
+    Token* Peek() {
+        scanner->ResetPeek();
+        return scanner->Peek();
+    }
+
+IGNORECASE
+
+CHARACTERS 
+    letter     = 'a'..'z'.
+    digit      = '0'..'9'.
+    hexdigit   = 'a'..'f'.
+    stringchar = ANY - '\''.
+    lf         = '\n'.
+
+TOKENS
+    ident   = (letter | '_') {letter | digit | '_'}.
+    string  = "\'" {stringchar | "\'\'"} "\'".
+    character = "#" digit {digit} .
+    //string  = "\"" {stringchar} "\"".
+    intcon  = digit {(digit | '_')} | digit {(digit | '_')} CONTEXT("..").
+    realcon = digit {digit} ( "." {digit} ["e" ["+" | "-"] digit {digit}] | "e" ["+" | "-"] digit {digit} ).
+    bincon = "2#" digit {(digit | '_')}.
+    octcon = "8#" digit {(digit | '_')}.
+    hexcon = "16#" (digit | hexdigit) {(digit | hexdigit | '_')}.
+    semicol = ";".
+    colon = ":".
+    dotdot  = "..".
+    dot  = ".".
+
+        ABSTRACT = "abstract".
+        AND = "and".
+        ARRAY = "array".
+        BEGIN = "begin".
+        BREAK = "break".
+     //   C = "c".
+        CASE = "case".
+        CLASS = "class".
+        CONST = "const".
+        CONSTANT = "constant".
+        CONSTRUCTOR = "constructor".
+        CONTINUE = "continue".
+        DEC = "dec".
+        DESTRUCTOR = "destructor".
+        DIV = "div".
+        DO = "do".
+        DOWNTO = "downto".
+        ELSE = "else".
+        END_ = "end".
+        EXCEPT = "except".
+        EXTERNAL = "external".
+        EXIT = "exit".
+        FALSE = "false".
+        FAR = "far".
+        FILE = "file".
+        FINALIZATION = "finalization".
+        FINALLY = "finally".
+        FOR = "for".
+        FORWARD = "forward".
+        FUNCTION = "function".
+        GOTO = "goto".
+        IDENT = "ident".
+        IF_ = "if".
+        INC = "inc".
+        INHERITED = "inherited".
+        HALT = "halt".
+        HIGH = "high".
+        IMPLEMENTATION = "implementation".
+        INTERFACE = "interface".
+        INITIALIZATION = "initialization".
+        IN = "in".
+        LABEL = "label".
+        LOOPHOLE = "loophole".
+        LOW = "low".
+        MOD = "mod".
+        NOT = "not".
+        OBJECT = "object".
+        OF = "of".
+        ON = "on".
+        OR = "or".
+        ORIGIN = "origin".
+        OTHERWISE = "otherwise".
+        OVERLOAD = "overload".
+        OVERRIDE = "override".
+        PACKED = "packed".
+        PRIVATE = "private".
+        PROCEDURE = "procedure".
+        PROGRAM = "program".
+        PROTECTED = "protected".
+        PUBLIC = "public".
+        RAISE_ = "raise".
+        RECORD = "record".
+        REPEAT = "repeat".
+        RETURN = "return".
+        SET = "set".
+        SHL = "shl".
+        SHR = "shr".
+        STATIC = "static".
+        STR = "str".
+     //   STRING = "string".
+        THEN = "then".
+        TO_ = "to".
+        TRUE = "true".
+        TRY = "try".
+        TYPE = "type".
+        UNTIL = "until".
+        UNIT = "unit".
+        USES = "uses".
+        VAR = "var".
+        VIRTUAL = "virtual".
+        WHILE = "while".
+        WITH = "with".
+        XOR = "xor".
+
+      //  INC = "inc".
+      //  DEC = "dec".
+        READ = "read".
+        READLN = "readln".
+        WRITE = "write".
+        WRITELN = "writeln".
+
+        PLUS= "+".
+        MINUS= "-".
+        MUL= "*".
+        DIVR= "/".
+
+       LET= ":=".
+       LETADD= "+=".
+       LETSUB= "-=".
+       LETDIV= "/=".
+       LETMUL= "*=".
+       LETSHL= ">>=".
+       LETSHR= "<<=".
+       LETAND= "&=".
+       LETOR= "|=".
+
+      GT= ">".
+      LT= "<".
+      GE= ">=".
+      LE= "<=".
+      EQ= "=".
+      NE= "<>".
+
+        C_NOT = "!".
+        C_OR = "||".
+        C_AND = "&&".
+        C_ORBIN = "|".
+        C_ANDBIN = "&".
+        C_SHL = "<<".
+        C_SHR = ">>".
+        C_MOD = "%".
+        C_EQ = "==".
+        C_NEQ = "!=".
+
+        CIRCUM = "^".
+
+        FUNCTION_BLOCK="function_block".
+        END_FUNCTION_BLOCK="end_function_block".
+
+        VAR_INPUT  ="var_input".
+        VAR_OUTPUT="var_output".
+        VAR_IN_OUT ="var_in_out".
+        VAR_EXTERNAL = "var_external".
+        VAR_CONST = "var_const".
+        END_VAR="end_var".
+
+        END_FUNCTION="end_function".
+        END_IF="end_if".
+        END_FOR="end_for".
+        END_WHILE="end_while".
+        END_REPEAT="end_repeat".
+        END_CASE="end_case".
+
+        END_PROGRAM="end_program".
+        END_TYPE="end_type".
+        END_RECORD="end_record".
+        END_CLASS="end_class".
+        RETAIN = "retain".
+
+        M_ADD = "add".
+        M_CONCAT = "concat".
+        M_EQ="eq".
+        M_NE="ne".
+        M_GE="ge".
+        M_GT="gt".
+        M_LE="le".
+        M_LT="lt".
+        M_MAX="max".
+        M_MIN="min".
+        M_MUL="mul".
+        M_MUX="mux".
+
+
+
+       OPENPAR= "(".
+       CLOSEPAR= ")".
+       OPEN_ANNO= "{%".
+       CLOSE_ANNO = "%}".
+       OPEN_BRACE = "{".
+       CLOSE_BRACE = "}".
+
+COMMENTS FROM "{" TO "}"
+COMMENTS FROM "(*" TO "*)"
+COMMENTS FROM "//" TO lf
+
+IGNORE '\t' + '\r' + '\n' + '\f'
+
+
+PRODUCTIONS
+
+//===============================
+// PRIMITIVES
+//===============================
+
+
+/*---------------------------------------------*/
+IdentRW<AST::ident &ident>
+= Ident<ident> | READ (. ident._ident = "Read"; .) | WRITE (. ident._ident = "Write"; .) .
+/*---------------------------------------------*/
+Ident<AST::ident &ident>
+= (ident | DIV | IN | MOD | SHL | SHR)
+        (.  ident._ident = ReadString(t);
+                             .).
+/*---------------------------------------------*/
+
+Constant<AST::constant &constant>
+= intcon                         (. constant._constant = ReadInteger(t,0,10);  .)
+| realcon                        (. constant._constant = ReadString(t).toDouble(); .)
+| TRUE                           (. constant._constant = true; .)
+| FALSE                          (. constant._constant = false; .)
+| bincon                         (. constant._constant = ReadInteger(t,2,2); .)
+| octcon                         (. constant._constant = ReadInteger(t,2,8); .)
+| hexcon                         (. constant._constant = ReadInteger(t,3,16); .)
+| (. QString s; .)
+CString<s> (. constant._constant = s; .)
+|  (. AST::set_construct set_construct(cur()); .)
+'[' ExprList<set_construct._expr_list> ']' (.  constant._constant = set_construct; .)
+.
+/*---------------------------------------------*/
+CString<QString& s> =
+(string             (. s.append( ReadString(t, true) ) ; .)
+ | character        (. s.append( QChar( (int)ReadInteger(t, 1) ) ) ; .)
+ )
+{string             (. s.append( ReadString(t, true) ); .)
+ | character        (. s.append( QChar( (int)ReadInteger(t, 1) ) ) ;  .)
+ }
+.
+/*---------------------------------------------*/
+
+//===============================
+// EXPRESSIONS
+//~, not                 ->	Highest
+//*, /, div, mod, and, &
+//|, !, +, -, or,
+//=, <>, <, <=, >, >=, in    -> Lowest
+//===============================
+Expr<AST::expr &expr>  (. AST::expr right; AST::binary binary(cur());  .)
+        =SimExpr<expr>
+{
+RelOp<binary._op>
+SimExpr<right> (. binary._left = expr; binary._right = right; expr._expr = binary; .)
+}.
+/*---------------------------------------------*/
+
+SimExpr<AST::expr &expr>  (. AST::expr right; AST::binary binary(cur());  .)
+= Term<expr>
+{
+AddOp<binary._op>
+Term<right> (. binary._left = expr; binary._right = right; expr._expr = binary; .)
+}.
+
+/*---------------------------------------------*/
+Term<AST::expr &expr>  (. AST::expr right; AST::binary binary(cur()); .)
+= Term2<expr>
+{
+MulOp<binary._op>
+Term2<right> (. binary._left = expr; binary._right = right; expr._expr = binary; .)
+}.
+
+/*---------------------------------------------*/
+Term2<AST::expr &expr>  (. AST::expr right; AST::binary binary(cur()); .)
+= SimpleExpr<expr>
+{
+BinaryOp<binary._op>
+SimpleExpr<right> (. binary._left = expr; binary._right = right; expr._expr = binary; .)
+}.
+
+/*---------------------------------------------*/
+RelOp<BytecodeVM::BinOp &op>
+= GT (. op = BytecodeVM::GT; .)
+| LT (. op = BytecodeVM::LT; .)
+| LE (. op = BytecodeVM::LE; .)
+| GE (. op = BytecodeVM::GE; .)
+| EQ (. op = BytecodeVM::EQ; .)
+| NE (. op = BytecodeVM::NE; .)
+| C_EQ (. op = BytecodeVM::EQ; .)
+| C_NEQ (. op = BytecodeVM::NE; .)
+.
+
+/*---------------------------------------------*/
+MulOp<BytecodeVM::BinOp &op>
+= MUL (. op = BytecodeVM::MUL; .)
+| DIV (. op = BytecodeVM::DIV; .)
+| DIVR (. op = BytecodeVM::DIVR; .)
+| MOD (. op = BytecodeVM::MOD; .)
+| AND (. op = BytecodeVM::AND; .)
+| C_MOD (. op = BytecodeVM::MOD; .)
+| C_AND (. op = BytecodeVM::ANDLOG; .)
+| C_ANDBIN (. op = BytecodeVM::ANDBIN; .)
+.
+/*---------------------------------------------*/
+AddOp<BytecodeVM::BinOp &op>
+= PLUS (. op = BytecodeVM::PLUS; .)
+| MINUS (. op = BytecodeVM::MINUS; .)
+| OR (. op = BytecodeVM::OR; .)
+| XOR (. op = BytecodeVM::XOR; .)
+| C_OR (. op = BytecodeVM::ORLOG; .)
+| C_ORBIN (. op = BytecodeVM::ORBIN; .)
+.
+/*---------------------------------------------*/
+BinaryOp<BytecodeVM::BinOp &op>
+= SHL (. op = BytecodeVM::SHL; .)
+| SHR (. op = BytecodeVM::SHR; .)
+| C_SHL (. op = BytecodeVM::SHL; .)
+| C_SHR (. op = BytecodeVM::SHR; .)
+.
+/*---------------------------------------------*/
+SimpleExpr<AST::expr &expr>  (. expr = AST::expr(cur()); AST::unary unary(cur());.)
+=
+  PLUS   PrimaryExprWrap<unary._expr> (. unary._op = BytecodeVM::UPLUS; expr._expr = unary;  .)
+| MINUS  PrimaryExprWrap<unary._expr> (. unary._op = BytecodeVM::UMINUS;expr._expr = unary;  .)
+| (NOT | C_NOT)  PrimaryExprWrap<unary._expr> (. unary._op = BytecodeVM::UNOT;expr._expr = unary;  .)
+| '~'  PrimaryExprWrap<unary._expr> (. unary._op = BytecodeVM::UINV;expr._expr = unary;  .)
+| PrimaryExprWrap<expr>
+.
+
+/*---------------------------------------------*/
+PrimaryExprWrap<AST::expr &expr> (. AST::primary primary; .)
+          = PrimaryExpr<primary> (. expr._expr = primary; .) .
+/*---------------------------------------------*/
+PrimaryExpr<AST::primary &primary>  (. primary = AST::primary(cur());
+AST::expr_list expr_list;
+AST::constant constant(cur()); AST::ident ident(cur()), field(cur());
+        .)
+=
+
+
+  OPENPAR   ExprList<expr_list> CLOSEPAR     (. primary._expr=expr_list;   .)
+
+ |                                          (. AST::internalexpr internalexpr(cur()); .)
+   Internalexpr<internalexpr>               (. primary._expr=internalexpr; .)
+
+ | Constant<constant>                       (. primary._expr=constant; .)
+ | Ident<ident>                             (.  primary._expr=ident;  .)
+ {
+                                        (. AST::primary_accessor primary_accessor(cur()); .)
+    Primary_accessor<primary_accessor>  (. primary._accessors << primary_accessor; .)
+
+ }
+ | '@' PrimaryExpr<primary>     (.  AST::primary_accessor primary_accessor(cur());
+                                    primary_accessor._primary_accessor =  AST::address_expr();
+                                    primary._accessors << primary_accessor;
+    .)
+.
+/*---------------------------------------------*/
+Primary_accessor<AST::primary_accessor &primary_accessor>
+    (. AST::call_expr call_expr(cur()); AST::deref_expr deref_expr(cur()); AST::idx_expr idx_expr(cur()); AST::access_expr access_expr(cur()); .)
+=
+    '[' ExprList<idx_expr._indexes> ']'   (.  primary_accessor._primary_accessor = idx_expr; .)
+
+    |
+   '.' IdentRW<access_expr._field>         (.  primary_accessor._primary_accessor = access_expr; .)
+    |
+   CIRCUM                                   (.  primary_accessor._primary_accessor = deref_expr; .)
+    |
+    OPENPAR  [ ExprList<call_expr._args>
+    ] CLOSEPAR                              (.  primary_accessor._primary_accessor = call_expr; .)
+.
+/*---------------------------------------------*/
+/*---------------------------------------------*/
+Internalexpr<AST::internalexpr &internalexpr> =
+LOW  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tLow;   .)
+|
+HIGH '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tHigh;   .)
+|
+INC  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tInc;   .)
+|
+DEC  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tDec;   .)
+|
+M_ADD  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tAdd;   .)
+|
+AND  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tAnd;   .)
+|
+M_CONCAT  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tConcat;   .)
+|
+M_EQ  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tEq;   .)
+|
+M_NE  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tNe;   .)
+|
+M_GE  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tGe;   .)
+|
+M_GT  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tGt;   .)
+|
+M_LE  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tLe;   .)
+|
+M_LT  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tLt;   .)
+|
+M_MAX  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tMax;   .)
+|
+M_MIN  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tMin;   .)
+|
+M_MUL  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tMul;   .)
+|
+OR  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tOr;   .)
+|
+XOR  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tXor;   .)
+|
+M_MUX  '(' ExprList<internalexpr._expr_list> ')' (. internalexpr._type = AST::internalexpr::tMux;   .)
+.
+
+/*---------------------------------------------*/
+ExprList<AST::expr_list &expr_list>  (. AST::expr expr(cur());  AST::ident ident(cur()); .)
+=
+ [IF (IsBoundSt()) Ident<ident> (. expr_list._idents << ident; .)  (':' | LET) ]
+  Expr<expr>                          (.  expr_list._exprs << expr; .)
+{ (',' | ';')
+[IF (IsBoundSt()) Ident<ident> (. expr_list._idents << ident; .)  (':' | LET) ]
+ Expr<expr>                          (.  expr_list._exprs << expr; .)
+}.
+
+/*---------------------------------------------*/
+Annotation<AST::annotation &annotation> =
+OPEN_ANNO ExprList<annotation._expr_list> CLOSE_ANNO .
+
+//===============================
+// STATEMENTS
+//===============================
+/*---------------------------------------------*/
+Sequence<AST::sequence &sequence> (. AST::statement statement(cur());  .)
+=
+Statement<statement> (. if (statement._statement.which()) // may be empty Statement.
+                            sequence._statements << statement;
+                    .)
+{
+  ';'  Statement<statement> (. if (statement._statement.which()) // may be empty Statement.
+                                  sequence._statements << statement;  .)
+}
+
+.
+/*---------------------------------------------*/
+Statement<AST::statement &statement> (. statement = AST::statement();    AST::internalfst internalfst(cur());  .)
+=
+[
+    (IF(IsLabelSt())            (.   AST::labelst labelst(cur());  .)
+Labelst<labelst>                (. statement._statement = labelst; .)
+) | (IF(IsAssignment())         (.   AST::assignmentst assignmentst(cur()); .)
+Assignmentst<assignmentst>      (. statement._statement = assignmentst; .)
+) |                             (.   AST::procst procst(cur());  .)
+Procst<procst>                  (. statement._statement = procst; .)
+ |
+                                (.   AST::compoundst compoundst(cur());  .)
+Compoundst<compoundst>          (. statement._statement = compoundst; .)
+|                               (.   AST::gotost gotost(cur());  .)
+Gotost<gotost>                  (. statement._statement = gotost; .)
+|                               (.   AST::switchst switchst(cur());  .)
+Switchst<switchst>              (. statement._statement = switchst; .)
+|                               (.   AST::ifst ifst(cur());  .)
+Ifst<ifst>                      (. statement._statement = ifst; .)
+|                               (.   AST::forst forst(cur());  .)
+Forst<forst>                    (. statement._statement = forst; .)
+|                               (.   AST::whilest whilest(cur());  .)
+Whilest<whilest>                (. statement._statement = whilest; .)
+|                               (.   AST::repeatst repeatst(cur());  .)
+Repeatst<repeatst>              (. statement._statement = repeatst; .)
+|                               (.   AST::withst withst(cur());  .)
+Withst<withst>                  (. statement._statement = withst; .)
+|                               (.   AST::tryst tryst(cur());  .)
+Tryst<tryst>                    (. statement._statement = tryst; .)
+|                               (.   AST::raisest raisest(cur());  .)
+Raisest<raisest>                (. statement._statement = raisest; .)
+|                               (.   AST::inheritedst inheritedst(cur());  .)
+Inheritedst<inheritedst>        (. statement._statement = inheritedst; .)
+
+|                               (.   AST::readst readst(cur());  .)
+Readst<readst>                  (. statement._statement = readst; .)
+|                               (.   AST::writest writest(cur());  .)
+Writest<writest>                (. statement._statement = writest; .)
+|                               (.   AST::strst strst(cur());  .)
+Strst<strst>                    (. statement._statement = strst; .)
+|                               (.   AST::onst onst(cur());  .)
+Onst<onst>                      (. statement._statement = onst; .)
+|                               (.   AST::internalfst internalfst(cur());  .)
+Internalfst<internalfst>        (. statement._statement = internalfst; .)
+
+]
+.
+/*---------------------------------------------*/
+Assignmentst<AST::assignmentst &assignmentst>
+=
+Expr<assignmentst._left> LET Expr<assignmentst._right>
+.
+/*---------------------------------------------*/
+Gotost<AST::gotost &gotost> = GOTO intcon (. int n; swscanf(t->val, L"%d", &n); gotost._iconst = n; .) .
+/*---------------------------------------------*/
+Switchst<AST::switchst &switchst> = CASE Expr<switchst._case> OF  Case_list<switchst._case_list>
+[(OTHERWISE | ELSE)  Sequence<switchst._else>  ]
+(END_ | END_CASE)
+.
+/*---------------------------------------------*/
+Case_list<AST::case_list &case_list>    (. AST::case_list_elem case_list_elem(cur()); .)
+        =
+ Case_list_elem<case_list_elem>      (. case_list << case_list_elem; .)
+{ ';' [  Case_list_elem<case_list_elem>    (. case_list << case_list_elem; .)  ]
+}
+.
+/*---------------------------------------------*/
+Case_list_elem<AST::case_list_elem &case_list_elem> (. case_list_elem = AST::case_list_elem();  .)
+= ExprList<case_list_elem._expr_list> ':' Statement<case_list_elem._statement>
+.
+/*---------------------------------------------*/
+Ifst<AST::ifst &ifst> =  (. AST::compoundst cif(cur()), celse(cur()); .)
+(
+IF(StSemantic()) IF_ Expr<ifst._expr> THEN Sequence<cif._sequence>   (. ifst._if._statement = cif;  .)
+                                     [ELSE Sequence<celse._sequence> (. ifst._else._statement = celse;  .) ] END_IF
+| IF_ Expr<ifst._expr> THEN Statement<ifst._if> [ELSE Statement<ifst._else>]
+)
+.
+/*---------------------------------------------*/
+//   forst           ::= FOR identifier := expr (TO | DOWNTO) expr DO statement
+//   repeatst        ::= REPEAT sequence UNTIL expr
+//   whilest         ::= WHILE expr DO statement
+//   withst          ::= WITH expr_list DO statement
+/*---------------------------------------------*/
+Forst<AST::forst &forst>                            (. forst._downto = false;  AST::compoundst body(cur()); .)
+=
+FOR Ident<forst._ident> LET Expr<forst._fromExpr>
+        (TO_ | DOWNTO                               (. forst._downto = true; .)
+        ) Expr<forst._toExpr> DO
+(
+    IF(StSemantic()) Sequence<body._sequence>   (. forst._statement._statement = body;  .) END_FOR
+    | Statement<forst._statement>
+)
+.
+/*---------------------------------------------*/
+Repeatst<AST::repeatst &repeatst> = REPEAT Sequence<repeatst._sequence> UNTIL Expr<repeatst._expr> [END_REPEAT] .
+/*---------------------------------------------*/
+Whilest<AST::whilest &whilest> (. AST::compoundst body(cur()); .)
+= WHILE  Expr<whilest._expr>  DO
+(
+    IF(StSemantic()) Sequence<body._sequence>   (. whilest._statement._statement = body;  .) END_WHILE
+    | Statement<whilest._statement>
+)
+.
+/*---------------------------------------------*/
+Withst<AST::withst &withst> = WITH  PrimaryExpr<withst._expr>  DO Statement<withst._statement> .
+/*---------------------------------------------*/
+Tryst<AST::tryst &tryst> (. tryst._flags = 0; .)  = TRY  Sequence<tryst._try_>
+         [EXCEPT Sequence<tryst._except_>   (. tryst._flags |= AST::tryst::HasExcept; .)  ]
+         [FINALLY Sequence<tryst._finally_> (. tryst._flags |= AST::tryst::HasFinally; .)  ]
+END_ .
+/*---------------------------------------------*/
+Raisest<AST::raisest &raisest> = RAISE_ Expr<raisest._expr>  .
+/*---------------------------------------------*/
+Inheritedst<AST::inheritedst &inheritedst> = INHERITED Ident<inheritedst._ident>  .
+/*---------------------------------------------*/
+Procst<AST::procst &procst> = PrimaryExpr<procst._primary> .
+/*---------------------------------------------*/
+Labelst<AST::labelst &labelst> = Ident <labelst._ident>  colon .
+/*---------------------------------------------*/
+Readst<AST::readst &readst>     (. readst._isLn =false; .) =  (READ | READLN   (. readst._isLn =true; .) )   "("  ExprList<readst._expr_list> ")" .
+/*---------------------------------------------*/
+Writest<AST::writest &writest>  (. writest._isLn =false; .) = (WRITE | WRITELN (. writest._isLn =true; .) )  "("  Write_list<writest._write_list> ")" .
+/*---------------------------------------------*/
+Strst<AST::strst &strst> = STR "("  Write_list<strst._write_list> ")" .
+/*---------------------------------------------*/
+Onst<AST::onst &onst> = ON  Ident<onst._ident> ':' Type<onst._type.get()>   DO Statement<onst._statement> .
+
+/*---------------------------------------------*/
+Internalfst<AST::internalfst &internalfst> =
+BREAK [OPENPAR CLOSEPAR]            (. internalfst._type = AST::internalfst::tBreak;  .)
+|
+CONTINUE [OPENPAR CLOSEPAR]         (. internalfst._type = AST::internalfst::tContinue;   .)
+|
+EXIT  [OPENPAR CLOSEPAR]            (. internalfst._type = AST::internalfst::tExit;   .)
+|
+RETURN  [OPENPAR CLOSEPAR]          (. internalfst._type = AST::internalfst::tExit;   .)
+.
+/*---------------------------------------------*/
+Write_list<AST::write_list &write_list> (. AST::write_param write_param(cur()); .)
+ = Write_param<write_param>  (. write_list._write_params << write_param; .)
+{
+   ',' Write_param<write_param>  (. write_list._write_params << write_param; .)
+}
+.
+
+/*---------------------------------------------*/
+Write_param<AST::write_param &write_param>  (. AST::constant constant(cur()); .)
+= Expr<write_param._expr>
+{ ':' Constant<constant>  (. write_param._constants << constant; .) }
+.
+
+
+//===============================
+// TYPES
+//===============================
+/*---------------------------------------------*/
+Type<AST::type &type>               (. type = AST::type(cur());  .)
+=                                   (. AST::simple_type simple_type(cur()); .)
+Simple_type<simple_type>            (. type._type = simple_type; .)
+
+|                                   (. AST::array_type array_type(cur()); .)
+Array_type<array_type>              (. type._type = array_type; .)
+
+|                                   (. AST::class_type class_type(cur()); .)
+Record_type<class_type>             (. type._type = class_type; .)
+
+|                                   (. AST::set_type set_type(cur()); .)
+Set_type<set_type>                  (. type._type = set_type; .)
+
+|                                   (. AST::file_type file_type(cur()); .)
+File_type<file_type>                (. type._type = file_type; .)
+
+|                                   (. AST::pointer_type pointer_type(cur()); .)
+Pointer_type<pointer_type>          (. type._type = pointer_type; .)
+
+|                                   (. AST::subrange_type subrange_type(cur()); .)
+Subrange_type<subrange_type>        (. type._type = subrange_type; .)
+
+|                                   (. AST::enum_type enum_type(cur()); .)
+Enum_type<enum_type>                (. type._type = enum_type; .)
+
+|                                   (. AST::function_type function_type(cur()); .)
+Function_type<function_type>        (. type._type = function_type; .)
+
+|                                   (. AST::class_type class_type(cur()); .)
+Class_type<class_type>              (. type._type = class_type; .)
+        //simple_type | array_type | record_type | set_type |
+        //                        file_type | pointer_type | subrange_type | enum_type
+.
+/*---------------------------------------------*/
+Simple_type<AST::simple_type &simple_type> = Ident<simple_type._ident> .
+/*---------------------------------------------*/
+Array_type<AST::array_type &array_type> (. AST::array_range array_range(cur()); .)
+=
+ ARRAY '[' Array_range<array_range>   (. array_type._array_ranges << array_range;  .)
+         { ',' Array_range<array_range> (. array_type._array_ranges << array_range;  .)
+         }
+        ']' OF Type<array_type._type>
+.
+/*---------------------------------------------*/
+Array_range<AST::array_range &array_range> (. array_range._hasLow = false; AST::expr boundHigh(cur()); .)
+= Expr<array_range._boundHigh>
+[ dotdot Expr<boundHigh>                  (.
+                                            array_range._boundLow = array_range._boundHigh;
+                                            array_range._boundHigh = boundHigh;
+                                            array_range._hasLow = true;
+                                            .)
+  ]
+.
+/*---------------------------------------------*/
+Record_type<AST::class_type &class_type>
+=
+RECORD                                  (. ; class_type._sections.clear();
+                                            AST::class_section section;
+                                            section._flags = AST::class_section::IsPublic;
+                                            class_type._flags |= AST::class_type::IsRecord;
+                                            .)
+        Var_decls<section._var_decls>   (. ; class_type._sections <<section;  .)
+END_ .
+/*---------------------------------------------*/
+Set_type<AST::set_type &set_type> = SET OF Type<set_type._type> .
+/*---------------------------------------------*/
+File_type<AST::file_type &file_type> = FILE OF Type<file_type._type> .
+/*---------------------------------------------*/
+Pointer_type<AST::pointer_type &pointer_type> = CIRCUM Type<pointer_type._type> .
+/*---------------------------------------------*/
+Subrange_type<AST::subrange_type &subrange_type> = '[' Expr <subrange_type._boundLow> dotdot Expr<subrange_type._boundHigh> ']' .
+/*---------------------------------------------*/
+Enum_type<AST::enum_type &enum_type> = '(' ExprList<enum_type._expr_list> ')' .
+/*---------------------------------------------*/
+Function_type<AST::function_type &function_type> (. function_type._isProc = true; .)
+=  ( PROCEDURE | FUNCTION  (. function_type._isProc = false; .)
+    ) .
+/*---------------------------------------------*/
+Class_type<AST::class_type &class_type>  (. class_type._flags = 0; .)
+=
+CLASS
+[ OPENPAR Ident<class_type._parent>
+  CLOSEPAR ]
+                                                 (.AST::class_section class_section(cur()); .)
+ Class_section<class_section>                    (. class_type._sections << class_section; .)
+ Class_sections<class_type._sections>
+END_ .
+/*---------------------------------------------*/
+Class_sections<AST::class_sections &class_sections>
+ =
+ {                                                  (.AST::class_section class_section(cur()); .)
+    (PUBLIC         (. class_section._flags = AST::class_section::IsPublic; .)
+     | PROTECTED    (. class_section._flags = AST::class_section::IsProtected; .)
+     | PRIVATE      (. class_section._flags = AST::class_section::IsPrivate; .)
+     ) Class_section<class_section>  (. class_sections << class_section; .)
+ }
+.
+/*---------------------------------------------*/
+Class_section<AST::class_section &class_section>    (. AST::proc_def proc_def(cur()); .)
+= [ Var_decls<class_section._var_decls> ]
+{  Proc_def_forward<proc_def>                         (. class_section._proc_fwd_decls << proc_def;  .)
+}
+.
+/*-----------------=====-----------------------*/
+//===============================
+// DECLARATIONS
+//===============================
+
+Decl_part<AST::decl_part& decl_part>(. decl_part = AST::decl_part();  .)
+=
+Decl_part_common<decl_part>
+|                                   (. AST::proc_def proc_def(cur()); .)
+Proc_def <proc_def>                 (. decl_part._decl_part = proc_def; .)
+
+.
+/*---------------------------------------------*/
+Decl_part_forward<AST::decl_part& decl_part>(. decl_part = AST::decl_part();  .)
+=
+Decl_part_common<decl_part>
+|                                   (. AST::proc_def proc_def(cur()); .)
+Proc_def_forward<proc_def>          (. decl_part._decl_part = proc_def; .)
+
+.
+/*---------------------------------------------*/
+Decl_part_common<AST::decl_part& decl_part>(. decl_part = AST::decl_part();  .)
+=                                   (. AST::label_decl_part label_decl_part(cur()); .)
+Label_decl_part<label_decl_part>    (. decl_part._decl_part = label_decl_part; .)
+|                                   (. AST::const_def_part const_def_part(cur()); .)
+Const_def_part<const_def_part>      (. decl_part._decl_part = const_def_part; .)
+|                                   (. AST::type_def_part type_def_part(cur()); .)
+Type_def_part<type_def_part>        (. decl_part._decl_part = type_def_part; .)
+|                                   (. AST::var_decl_part var_decl_part(cur()); .)
+Var_decl_part <var_decl_part>       (. decl_part._decl_part = var_decl_part; .)
+|                                   (. AST::uses_part uses_part(cur()); .)
+Uses_part <uses_part>               (. decl_part._decl_part = uses_part; .)
+.
+/*---------------------------------------------*/
+Label_decl_part<AST::label_decl_part& label_decl_part> (. AST::ident ident(cur()); .)
+=
+LABEL Ident<ident>   (. label_decl_part._idents << ident; .)
+{ ',' Ident<ident>     (. label_decl_part._idents << ident; .)
+}  ';'
+.
+/*---------------------------------------------*/
+Const_def_part<AST::const_def_part &const_def_part> (. AST::const_def  const_def(cur());.)
+=  CONST Const_def <const_def>   (. const_def_part._const_defs << const_def; .)
+ {  Const_def <const_def>       (. const_def_part._const_defs << const_def; .)
+ }
+.
+/*---------------------------------------------*/
+Const_def<AST::const_def &const_def>
+= Ident<const_def._ident>
+        [':' Type<const_def._type> ]
+        '=' Expr<const_def._initializer> ';'
+.
+/*---------------------------------------------*/
+Type_def_part<AST::type_def_part &type_def_part> (. AST::type_def  type_def(cur());.)
+=  TYPE Type_def <type_def>    (. type_def_part._type_defs << type_def; .)
+ {  Type_def <type_def>       (. type_def_part._type_defs << type_def; .)
+ }
+.
+/*---------------------------------------------*/
+Type_def<AST::type_def &type_def>
+= Ident<type_def._ident> '=' Type<type_def._type> ';'
+.
+/*---------------------------------------------*/
+Decl_part_list<AST::decl_part_list& decl_part_list> (. AST::decl_part decl_part(cur()); .)
+=
+Decl_part<decl_part> (. decl_part_list._parts << decl_part;  .)
+{
+    Decl_part<decl_part> (. decl_part_list._parts << decl_part;  .)
+}
+.
+/*---------------------------------------------*/
+Decl_part_list_forward<AST::decl_part_list& decl_part_list> (. AST::decl_part decl_part(cur()); .)
+=
+Decl_part_forward<decl_part> (. decl_part_list._parts << decl_part;  .)
+{
+    Decl_part_forward<decl_part> (. decl_part_list._parts << decl_part;  .)
+}
+.
+/*---------------------------------------------*/
+Var_decl_part <AST::var_decl_part &var_decl_part>
+=  VAR Var_decls<var_decl_part._var_decls >   .
+/*---------------------------------------------*/
+Var_decls<AST::var_decls &var_decls>
+= (. AST::var_decl var_decl(cur()); .)
+Var_decl<var_decl>   ';'           (. var_decls << var_decl;  .)
+{
+    (. AST::var_decl var_decl(cur()); .)
+    Var_decl<var_decl>  ';'           (. var_decls << var_decl;  .)
+}
+.
+/*---------------------------------------------*/
+Var_decl<AST::var_decl& var_decl> (. var_decl._idents.clear();var_decl._initializer = AST::expr(); .)
+=
+      (.  AST::ident ident(cur()); .)
+Ident<ident>                                        (. var_decl._idents << ident; .)
+{ ',' (.  AST::ident ident(cur()); .) Ident<ident>  (. var_decl._idents << ident; .)
+        } ':' Type<var_decl._type>
+[ ('=' | LET ) Expr<var_decl._initializer> ]
+[ Annotation<var_decl._annotation> ]
+
+.
+/*---------------------------------------------*/
+Uses_part<AST::uses_part& uses_part> (. AST::ident ident(cur()); .)
+=
+USES Ident<ident>       (. uses_part._idents << ident; .)
+{ ',' Ident<ident>      (. uses_part._idents << ident; .)
+}  ';'
+.
+/*---------------------------------------------*/
+Proc_decl<AST::proc_decl &proc_decl> (. proc_decl._flags = 0; .)
+= (PROCEDURE                         (. proc_decl._flags  |= AST::proc_decl::IsProcedure; .)
+   | FUNCTION                        (. proc_decl._flags  |= AST::proc_decl::IsFunction; .)
+   | CONSTRUCTOR                     (. proc_decl._flags  |= AST::proc_decl::IsConstructor; .)
+   | DESTRUCTOR                      (. proc_decl._flags  |= AST::proc_decl::IsDestructor; .)
+   ) Ident<proc_decl._ident>         (. AST::ident tmpIdent(cur()), tmpIdent2(cur()); .)
+    [ '.' Ident<tmpIdent>           (. proc_decl._class =proc_decl._ident; proc_decl._ident =tmpIdent;   .)
+    ]
+    [ Formal_params<proc_decl._formal_params> ]
+[ ':' Type<proc_decl._type> ]
+
+
+.
+/*---------------------------------------------*/
+Proc_def <AST::proc_def &proc_def> (. proc_def._isForward = true; .)
+        = Proc_decl<proc_def._proc_decl> ';'
+        (
+          FORWARD ';'
+        |
+        Block<proc_def._block>  (. proc_def._isForward = false; .)
+         ';')
+Proc_def_params<proc_def>
+.
+/*---------------------------------------------*/
+Proc_def_forward <AST::proc_def &proc_def> (. proc_def._isForward = true; .)
+        = Proc_decl<proc_def._proc_decl>
+
+        ';'
+Proc_def_params<proc_def>
+.
+/*---------------------------------------------*/
+Proc_def_params <AST::proc_def &proc_def> =
+    [  OVERRIDE ';'  (. proc_def._proc_decl._flags |= AST::proc_decl::IsOverride;  .) ]
+    [  OVERLOAD ';'  (. proc_def._proc_decl._flags |= AST::proc_decl::IsOverload;  .) ]
+
+.
+/*---------------------------------------------*/
+Formal_params<AST::formal_params &formal_params> (. formal_params.clear(); AST::formal_param formal_param(cur()); .)
+=
+'(' (')' |
+ Formal_param <formal_param>                (. formal_params << formal_param; .)
+{ ';' Formal_param <formal_param>               (. formal_params << formal_param; .)
+} ')' ).
+/*---------------------------------------------*/
+Formal_param <AST::formal_param &formal_param>  (. formal_param._flags = 0; .)
+= [ VAR                                         (. formal_param._flags |= AST::formal_param::IsVar; .)
+        ]
+[ CONST                                         (. formal_param._flags |= AST::formal_param::IsConst; .)
+        ]                                       (. AST::var_decl var_decl(cur());  .)
+Var_decl<var_decl>                              (. formal_param._formal_param = var_decl; .)
+|                                               (.  AST::proc_decl proc_decl(cur()); .)
+Proc_decl<proc_decl>                            (. formal_param._formal_param = proc_decl; .)
+.
+/*---------------------------------------------*/
+
+
+//===============================
+// PROGRAM AND BLOCKS
+//===============================
+
+
+
+Pascal  (. _pascal = AST::pascalSource();AST::stProgram stProgram(cur()); .)
+=
+(
+IF(StSemantic()) StProgram<stProgram>   (. _pascal._pascal = stProgram; .)
+|
+                                        (. AST::program program(cur()); .)
+Program<program> dot                    (. _pascal._pascal = program; .)
+|                                       (. AST::unit unit(cur()); .)
+Unit<unit>  dot                         (. _pascal._pascal = unit; .)
+)
+
+.
+/*---------------------------------------------*/
+
+Program<AST::program& program>
+=
+PROGRAM Ident<program._ident> ";"
+Block<program._block>
+.
+/*---------------------------------------------*/
+Unit<AST::unit& unit> (. unit._flags =0; .)
+=
+UNIT Ident<unit._ident> ";"
+[INTERFACE Decl_part_list_forward<unit._interface>      (. unit._flags |= AST::unit::HasInterface;  .) ]
+[IMPLEMENTATION [Decl_part_list<unit._implementation>   (. unit._flags |= AST::unit::HasImplementation;  .) ] ]
+[BEGIN          Sequence<unit._block>                   (. unit._flags |= AST::unit::HasBlock;  .) ]
+[INITIALIZATION Sequence<unit._initialization>          (. unit._flags |= AST::unit::HasInit;  .) ]
+[FINALIZATION   Sequence<unit._finalization>            (. unit._flags |= AST::unit::HasFin;  .) ]
+END_
+.
+
+/*---------------------------------------------*/
+Block<AST::block& block> (.  .)
+=
+      [  Decl_part_list<block._decl_part_list> ]
+        Compoundst <block._compoundst>
+        .
+/*---------------------------------------------*/
+Compoundst<AST::compoundst &compoundst>
+=
+BEGIN
+Sequence<compoundst._sequence>
+END_ .
+
+
+//===============================
+// Structured text
+//===============================
+
+/*---------------------------------------------*/
+StProgram<AST::stProgram& program> (. program._hasProgram = false; .)
+=
+
+[StDecl_part_list<program._decl_part_list>]
+[
+PROGRAM (. program._hasProgram = true; .) Ident<program._program._proc_decl._ident>
+FBlock<program._program>
+END_PROGRAM
+]
+.
+/*---------------------------------------------*/
+FBlock<AST::proc_def& proc_def> (. proc_def._isForward = false; .)
+=
+{
+    StVarDecl<proc_def._block._decl_part_list._parts>
+    |
+    StParamDecl<proc_def._proc_decl._formal_params>
+}
+Sequence<proc_def._block._compoundst._sequence>
+.
+/*---------------------------------------------*/
+StParamDecl<AST::formal_params& formal_params>    (. AST::formal_param formal_param(cur());
+                                                     AST::var_decl var_decl(cur());
+                                                    // int flags = 0;
+        .)
+=
+(      VAR_INPUT  (. var_decl._flags |= AST::var_decl::IsInput; .)
+     | VAR_OUTPUT (. formal_param._flags |= AST::formal_param::IsVar; var_decl._flags |= AST::var_decl::IsOutput; .)
+     | VAR_IN_OUT (. formal_param._flags |= AST::formal_param::IsVar; var_decl._flags |= AST::var_decl::IsInput | AST::var_decl::IsOutput; .)
+)
+[ RETAIN (. var_decl._flags |= AST::var_decl::IsStatic; .) ]
+
+   Var_decl<var_decl>  ';'         (.
+                                      formal_param._formal_param = var_decl;
+                                      formal_params << formal_param;    .)
+{  Var_decl<var_decl>  ';'         (.
+                                      formal_param._formal_param = var_decl;
+                                      formal_params << formal_param;    .)
+}
+END_VAR
+.
+/*---------------------------------------------*/
+StVarDecl<AST::decl_parts& decl_parts>    (. AST::decl_part decl_part(cur());
+                                             bool IsStatic = false, IsConst = false, IsExternal = false;
+                                            AST::var_decl_part var_decl_part(cur());
+        .)
+=
+(      VAR [ RETAIN (. IsStatic = true; .) ]
+           [ CONST (. IsConst = true; .) ]
+           [ CONSTANT (. IsConst = true; .) ]
+     | VAR_EXTERNAL (. IsExternal = true; .)
+     | VAR_CONST (. IsConst = true; .)
+
+)
+Var_decls<var_decl_part._var_decls>
+
+    (.
+     for (int i=0; i < var_decl_part._var_decls.size(); i++) {
+        if (IsStatic)    var_decl_part._var_decls[i]._flags |= AST::var_decl::IsStatic;
+        if (IsConst)     var_decl_part._var_decls[i]._flags |= AST::var_decl::IsConst;
+        if (IsExternal)  var_decl_part._var_decls[i]._flags |= AST::var_decl::IsExternal;
+     }
+      .)
+END_VAR
+    (.  decl_part._decl_part = var_decl_part;
+        decl_parts << decl_part;    .)
+.
+/*---------------------------------------------*/
+
+//===============================
+// TYPES
+//===============================
+/*---------------------------------------------*/
+StType<AST::type &type>             (. type = AST::type(cur());  .)
+=                                   (. AST::simple_type simple_type(cur()); .)
+Simple_type<simple_type>            (. type._type = simple_type; .)
+
+|                                   (. AST::array_type array_type(cur()); .)
+Array_type<array_type>              (. type._type = array_type; .)
+
+|                                   (. AST::class_type class_type(cur()); .)
+StRecord_type<class_type>           (. type._type = class_type; .)
+
+|                                   (. AST::class_type class_type(cur()); .)
+StClass_type<class_type>            (. type._type = class_type; .)
+.
+
+/*---------------------------------------------*/
+StRecord_type<AST::class_type &class_type> =
+RECORD                                  (. ; class_type._sections.clear();
+                                        AST::class_section section;
+                                        section._flags = AST::class_section::IsPublic;
+                                        class_type._flags |= AST::class_type::IsRecord;
+                                        .)
+Var_decls<section._var_decls>
+                                        (. ; class_type._sections <<section;  .)
+END_RECORD .
+/*---------------------------------------------*/
+StClass_type<AST::class_type &class_type>  (. class_type._flags = 0; .)
+=
+CLASS [ Annotation<class_type._annotation> ]
+                                                (.AST::class_section class_section(cur()); .)
+StClass_section<class_section>                    (. class_type._sections << class_section; .)
+StClass_sections<class_type._sections>
+
+END_CLASS .
+/*---------------------------------------------*/
+StClass_sections<AST::class_sections &class_sections>
+=
+{                                                  (.AST::class_section class_section(cur()); .)
+    (PUBLIC         (. class_section._flags = AST::class_section::IsPublic; .)
+     | PROTECTED    (. class_section._flags = AST::class_section::IsProtected; .)
+     | PRIVATE      (. class_section._flags = AST::class_section::IsPrivate; .)
+     ) StClass_section<class_section>  (. class_sections << class_section; .)
+}
+.
+/*---------------------------------------------*/
+StClass_section<AST::class_section &class_section>
+=
+      [  Var_decls<class_section._var_decls> ]
+
+{                                                (. AST::proc_def proc_def(cur()); .)
+    StProc_def<proc_def>                         (. ;class_section._proc_fwd_decls << proc_def;  .)
+}
+.
+/*-----------------=====-----------------------*/
+
+/*---------------------------------------------*/
+StDecl_part_list<AST::decl_part_list& decl_part_list> (. AST::decl_part decl_part(cur()); .)
+=
+StDecl_part<decl_part> (. decl_part_list._parts << decl_part;  .)
+{
+    StDecl_part<decl_part> (. decl_part_list._parts << decl_part;  .)
+}
+.
+/*---------------------------------------------*/
+StDecl_part<AST::decl_part& decl_part>(. decl_part = AST::decl_part();  .)
+=
+                                    (. AST::type_def_part type_def_part(cur()); .)
+StType_def_part<type_def_part>      (. decl_part._decl_part = type_def_part; .)
+
+|                                   (. AST::proc_def proc_def(cur()); .)
+StProc_def <proc_def>               (. decl_part._decl_part = proc_def; .)
+
+.
+/*---------------------------------------------*/
+StType_def_part<AST::type_def_part &type_def_part> (. AST::type_def  type_def(cur());.)
+=  TYPE
+    Ident<type_def._ident> ':' StType<type_def._type> (. type_def_part._type_defs << type_def; .)
+   END_TYPE
+.
+
+/*---------------------------------------------*/
+
+StProc_def<AST::proc_def& proc_def> (.  proc_def._isForward=false; .)
+=
+       (
+        FUNCTION_BLOCK Ident<proc_def._proc_decl._ident>
+              FBlock<proc_def>
+        END_FUNCTION_BLOCK (. proc_def._proc_decl._flags |= AST::proc_decl::IsProcedure;.)
+      |
+      FUNCTION Ident<proc_def._proc_decl._ident> ':' Type<proc_def._proc_decl._type>
+         FBlock<proc_def>
+      END_FUNCTION (.  ;proc_def._proc_decl._flags |= AST::proc_decl::IsFunction; .)
+      )
+.
+/*---------------------------------------------*/
+END Pascal.

@@ -1,0 +1,20 @@
+<RCC>
+    <qresource prefix="/ru" lang="ru">
+        <file>pascal/test1.pas</file>
+        <file>pascal/test1a.pas</file>
+        <file>pascal/test1b.pas</file>
+        <file>pascal/test2.pas</file>
+        <file>pascal/testString.pas</file>
+        <file>pascal/testConvert.pas</file>
+        <file>pascal/test2a.pas</file>
+        <file>pascal/nbody.pas</file>
+        <file>pascal/cycles.pas</file>
+        <file>pascal/minimum.pas</file>
+        <file>pascal/classesScopesTest.pas</file>
+        <file>pascal/classesFieldsAndMembersTest.pas</file>
+        <file>pascal/forwardDeclaration.pas</file>
+        <file>pascal/pointers.pas</file>
+        <file>pascal/with.pas</file>
+        <file>pascal/breakContinue.pas</file>
+    </qresource>
+</RCC>
