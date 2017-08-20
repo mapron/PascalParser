@@ -264,7 +264,12 @@ bool CompilerFrontend::pascal2c(const QString &pascalText, QString &ctext)
 	d->_scanner->ReInit();
 	d->_parser->Parse();
 
+	auto mes = d->_messages;
+	d->_gen->compile( d->_parser->_pascal );
+	d->_messages = mes;
+
 	StringVisitor visitor(StringVisitor::otC);
+	visitor._codeTypes = d->_gen->_codeTypes;
 	ctext = boost::apply_visitor(visitor, d->_parser->_pascal._pascal);
 
 	return !d->_messages.errorsCount;

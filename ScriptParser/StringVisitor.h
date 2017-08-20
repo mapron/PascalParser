@@ -13,6 +13,7 @@
 #pragma once
 
 #include "ast.h"
+#include "SymTableTypes.h"
 
 #include <boost/variant.hpp>
 
@@ -26,8 +27,7 @@ class StringVisitor : public boost::static_visitor<QString>
 {
 
 public:
-	QMap<QString, QString> _expr2type;
-	QMap<QString, QStringList> _typesFields;
+	QMap<AST::CodeLocation, RefType> _codeTypes;
 	enum OutType { otPascal, otC };
 	StringVisitor(OutType type = otPascal, int flags = 0)  : _level(0),_type(type),_flags(flags) {}
 

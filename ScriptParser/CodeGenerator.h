@@ -45,9 +45,11 @@ class CodeGenerator : public CodeBlockProcessInterface
 	bool _isTopBlock;
 
 	FuncObj *_currentFunc;
-	TypeInferencer* _types;
 
+	TypeInferencer* _types;
 public:
+
+	QMap<AST::CodeLocation, RefType> _codeTypes;
 	SymTable   *_tab;
 	AST::CodeMessages* _errors;
 	QString _startAddress;

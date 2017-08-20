@@ -94,7 +94,7 @@ AddTarget(NAME ScriptRuntime ROOT ScriptRuntime/ CSRC *.cpp *.h
 		TreeVariant
 )
 
-AddTarget(NAME ScriptParser ROOT ScriptParser/ CSRC *.cpp *.h}
+AddTarget(NAME ScriptParser ROOT ScriptParser/ CSRC *.cpp *.h
 	DEPS
 		ScriptRuntime TreeVariant Qt5::Core
 )

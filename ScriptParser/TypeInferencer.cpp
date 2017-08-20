@@ -83,7 +83,8 @@ RefType TypeInferencer::typeInference(const AST::set_construct &val)
 
 RefType TypeInferencer::typeInference(const AST::expr &val)
 {
-	return boost::apply_visitor(TypeVisitor(this), val._expr);
+	RefType type = boost::apply_visitor(TypeVisitor(this), val._expr);
+	return type;
 }
 
 RefType TypeInferencer::typeInference(const AST::expr_list &val)

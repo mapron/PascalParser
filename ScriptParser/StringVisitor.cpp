@@ -383,17 +383,16 @@ QString StringVisitor::operator ()(const AST::procst &val) const
 
 QString StringVisitor::operator ()(const AST::withst &val) const
 {
-	if (_type == otC){
+	if (_type == otC)
+	{
 		QStringList ret;
-		_type = otPascal;
-		QString e = (*this)(val._expr);
-		_type = otC;
-		QString type = this->_expr2type.value(e);
+
+		PTypeDef exprType = _codeTypes[val._expr._loc].getType();
 		QString ln = "_l" + QString::number(_level);
 		ret << "{ auto &"+ ln + " = "  + (*this)(val._expr)  + ";";
-		foreach (QString alias, this->_typesFields.value(type)){
+		QStringList fields = exprType ? exprType->_childNamesArray : QStringList() ;
+		foreach (QString alias, fields)
 			ret << idn() +  " auto &"+ alias + " = " +ln + "." + alias + ";";
-		}
 
 		_level++;
 		ret << idn() + (*this)(val._statement) ;

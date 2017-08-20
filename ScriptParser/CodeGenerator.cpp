@@ -279,6 +279,7 @@ CodeBlockInfo CodeGenerator::processBlock(const AST::primary &val)
 	result.code << resultsSequence;
 	result.code << ret;
 	result.code.optimize();
+	_codeTypes[val._loc] = result.type;
 	return result;
 }
 
